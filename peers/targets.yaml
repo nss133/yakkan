@@ -1,0 +1,40 @@
+version: 1
+defaults:
+  user_agent: "yakkan-peer-fetcher/0.1 (+internal legal review)"
+  request_timeout_s: 30
+  rate_limit_s: 1.0
+
+targets:
+  - insurer: "삼성생명"
+    code: "samsunglife"
+    seed_urls:
+      - "https://www.samsunglife.com/individual/products/disclosure/sales/PDO-PRPRI010110M"
+
+  - insurer: "교보생명"
+    code: "kyobo"
+    seed_urls:
+      - "https://www.kyobo.com/dgt/web/product-official/information"
+      - "https://www.kyobo.com/dgt/web/product-official/all-product/search"
+
+  - insurer: "한화생명"
+    code: "hanwhalife"
+    seed_urls:
+      - "https://www.hanwhalife.com/main/disclosure/goods/disclosurenotice/DF_GDDN000_P10000.do?MENU_ID1=DF_GDGL000&MENU_ID2=DF_GDGL000_P20000"
+
+  - insurer: "신한라이프"
+    code: "shinhanlife"
+    seed_urls:
+      - "https://www.shinhanlife.co.kr/hp/cdhi0010.do"
+      - "https://www.shinhanlife.co.kr/hp/cdhi0030.do"
+
+  - insurer: "동양생명"
+    code: "dongyanglife"
+    seed_urls:
+      - "https://pbano.myangel.co.kr/"
+      - "https://pbano.myangel.co.kr/paging/WE_AC_WEPAAP020100L"
+
+  - insurer: "흥국생명"
+    code: "heungkuklife"
+    seed_urls:
+      - "https://www.heungkuklife.co.kr/"
+

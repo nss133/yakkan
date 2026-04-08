@@ -5,6 +5,7 @@ __pycache__/
 
 # generated outputs
 out/
+peer_data/
 
 # editor / tooling
 .cursor/

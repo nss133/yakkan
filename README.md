@@ -20,6 +20,26 @@ python -m policy_review.cli \
   --out out/PolicyReview.xlsx
 ```
 
+## 타사 약관 PDF 수집(초기 단계)
+
+주의: 각 사이트의 이용약관/robots.txt를 준수해야 합니다.
+
+```bash
+python -m policy_review.peer_cli --targets peers/targets.yaml --i-accept-site-tos
+```
+
+## 타사 약관 PDF → 조항 인덱스 생성
+
+다운로드한 PDF 폴더를 상품군별로 인덱싱해 `peer_data/index/.../documents.jsonl`을 생성합니다.
+
+```bash
+python -m policy_review.peer_index_cli \
+  --insurer "삼성생명" \
+  --insurer-code samsunglife \
+  --product-group whole_life \
+  --pdf-dir peer_data/raw/samsunglife
+```
+
 ## 입력 포맷 (examples/input.json)
 
 - `new_clause`: 신 조항
