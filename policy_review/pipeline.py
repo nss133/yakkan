@@ -11,7 +11,7 @@ from .numbers import compare_quantities, deltas_to_summary
 from .peer import compute_peer_coverage, top_k
 from .rules import apply_rules, load_rules
 from .scoring import build_risk_finding, compute_risk, pick_recommendation
-from .similarity import combined_similarity, extract_clause_number, extract_clause_path_parts
+from .similarity import ClauseMatcher, extract_clause_number, extract_clause_path_parts
 from .text import split_sentences
 
 
@@ -41,134 +41,7 @@ def _snippet(text: str, max_len: int = 140) -> str:
     return t[:max_len]
 
 
-def _find_best_clause_by_path_or_similarity(
-    new_clause: Clause,
-    old_clauses: list[Clause],
-) -> tuple[Clause | None, float]:
-    """
-    Improved alignment:
-    1) clause_path exact match
-    2) combined similarity (조항번호/제목/본문/키워드/3-gram)
-    returns (old_clause, confidence 0~1)
-    """
-    for c in old_clauses:
-        if c.clause_path == new_clause.clause_path:
-            return c, 0.98
 
-    # 후보 축소 1: 조/항/호 단위로 최대한 좁히기
-    jo_new, hang_new, ho_new = extract_clause_path_parts(new_clause.clause_path, new_clause.title, new_clause.text)
-    num_new = jo_new
-    candidates = old_clauses
-    if jo_new and hang_new:
-        same_jo_hang = []
-        for c in old_clauses:
-            jo_c, hang_c, _ = extract_clause_path_parts(c.clause_path, c.title, c.text)
-            if jo_c == jo_new and hang_c == hang_new:
-                same_jo_hang.append(c)
-        if same_jo_hang:
-            candidates = same_jo_hang
-    elif jo_new:
-        same_jo = []
-        for c in old_clauses:
-            jo_c, _, _ = extract_clause_path_parts(c.clause_path, c.title, c.text)
-            if jo_c == jo_new:
-                same_jo.append(c)
-        if same_jo:
-            candidates = same_jo
-
-    # 후보 축소 2: focus axis가 같으면 우선(후보가 너무 많을 때만)
-    if len(candidates) > 30:
-        axis_new = classify_focus_axis(new_clause.text)
-        axis_same = [c for c in candidates if classify_focus_axis(c.text) == axis_new]
-        if axis_same:
-            candidates = axis_same
-
-    # 최종: 후보군 내에서 복합 유사도 최고 선택
-    best: tuple[Clause | None, float] = (None, 0.0)
-    for c in candidates:
-        sim = combined_similarity(
-            clause_path_a=new_clause.clause_path,
-            title_a=new_clause.title,
-            text_a=new_clause.text,
-            clause_path_b=c.clause_path,
-            title_b=c.title,
-            text_b=c.text,
-        )
-        if sim > best[1]:
-            best = (c, sim)
-    if best[1] >= 0.55:
-        return best[0], float(best[1])
-    return None, 0.6
-
-
-def _peer_match_topk_for_clause(
-    new_clause: Clause,
-    peer_documents: list[dict[str, Any]],
-    k: int = 3,
-) -> list[PeerMatch]:
-    """
-    peer_documents: [{doc_id, insurer, clauses:[{...}]}]
-    Improved matching: combined similarity (조항번호/제목/본문/키워드/3-gram)
-    """
-    matches: list[PeerMatch] = []
-    jo_new, hang_new, _ = extract_clause_path_parts(new_clause.clause_path, new_clause.title, new_clause.text)
-    num_new = jo_new
-    axis_new = classify_focus_axis(new_clause.text)
-    for pd in peer_documents:
-        peer_doc_id = pd["doc_id"]
-        insurer = pd.get("insurer", "")
-        peer_clause_dicts = list(pd.get("clauses", []))
-
-        # 후보 축소(보험사별): 조/항 단위 우선
-        if jo_new and hang_new:
-            same_jo_hang = []
-            for cd in peer_clause_dicts:
-                jo_c, hang_c, _ = extract_clause_path_parts(cd.get("clause_path", ""), cd.get("title", ""), cd.get("text", ""))
-                if jo_c == jo_new and hang_c == hang_new:
-                    same_jo_hang.append(cd)
-            if same_jo_hang:
-                peer_clause_dicts = same_jo_hang
-        elif num_new:
-            same_jo = []
-            for cd in peer_clause_dicts:
-                jo_c, _, _ = extract_clause_path_parts(cd.get("clause_path", ""), cd.get("title", ""), cd.get("text", ""))
-                if jo_c == num_new:
-                    same_jo.append(cd)
-            if same_jo:
-                peer_clause_dicts = same_jo
-
-        # 2) 그래도 많으면 focus axis가 같은 후보 우선
-        if len(peer_clause_dicts) > 50:
-            axis_same = [
-                cd
-                for cd in peer_clause_dicts
-                if classify_focus_axis(cd.get("text", "")) == axis_new
-            ]
-            if axis_same:
-                peer_clause_dicts = axis_same
-
-        for cd in peer_clause_dicts:
-            peer_clause = _clause_from_dict({**cd, "doc_id": peer_doc_id})
-            sim = combined_similarity(
-                clause_path_a=new_clause.clause_path,
-                title_a=new_clause.title,
-                text_a=new_clause.text,
-                clause_path_b=peer_clause.clause_path,
-                title_b=peer_clause.title,
-                text_b=peer_clause.text,
-            )
-            if sim <= 0:
-                continue
-            matches.append(
-                PeerMatch(
-                    peer_doc_id=peer_doc_id,
-                    peer_insurer=insurer,
-                    peer_clause_path=peer_clause.clause_path,
-                    peer_snippet=_snippet(peer_clause.text),
-                    sim_score=float(sim),
-                )
-            )
-    return top_k(matches, k=k)
 
 
 def run_document(
@@ -197,14 +70,45 @@ def run_document(
     if old_doc:
         old_clauses = [_clause_from_dict({**c, "doc_id": old_doc["doc_id"]}) for c in old_doc.get("clauses", [])]
 
+    old_matcher = ClauseMatcher(old_clauses) if old_clauses else None
+
+    all_peer_clauses = []
+    for pd in peer_docs:
+        peer_doc_id = pd["doc_id"]
+        insurer = pd.get("insurer", "")
+        for cd in pd.get("clauses", []):
+            all_peer_clauses.append({**cd, "doc_id": peer_doc_id, "insurer": insurer})
+            
+    peer_matcher = ClauseMatcher(all_peer_clauses) if all_peer_clauses else None
+
     diff_rows: list[dict[str, Any]] = []
     peer_rows: list[dict[str, Any]] = []
     risk_rows: list[dict[str, Any]] = []
 
     row_id = 1
     for nc in new_clauses:
-        oc, align_conf = _find_best_clause_by_path_or_similarity(nc, old_clauses)
-        peer_matches = _peer_match_topk_for_clause(nc, peer_docs, k=3) if peer_docs else []
+        # 신/구 조항 매칭
+        oc, align_conf = None, 0.6
+        if old_matcher:
+            res = old_matcher.search(nc, top_k=1)
+            if res and res[0][1] >= 0.55:
+                oc, align_conf = res[0]
+
+        # 타사 조항 매칭
+        peer_matches = []
+        if peer_matcher:
+            res = peer_matcher.search(nc, top_k=3)
+            for pc, sim in res:
+                if sim > 0:
+                    peer_matches.append(
+                        PeerMatch(
+                            peer_doc_id=pc["doc_id"],
+                            peer_insurer=pc["insurer"],
+                            peer_clause_path=pc.get("clause_path", ""),
+                            peer_snippet=_snippet(pc.get("text", "")),
+                            sim_score=float(sim),
+                        )
+                    )
 
         new_sentences = split_sentences(nc.text)
         rule_hits = apply_rules(new_sentences, rules)

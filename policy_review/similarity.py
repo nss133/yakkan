@@ -3,6 +3,11 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
+from typing import Any
+
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 _WS_RE = re.compile(r"\s+")
@@ -181,4 +186,74 @@ def combined_similarity(
     base = (0.55 * text_sim) + (0.25 * title_sim) + (0.20 * kw_sim)
     score = min(1.0, base + clause_num_bonus)
     return float(score)
+
+
+class ClauseMatcher:
+    def __init__(self, clauses: list[Any]):
+        """
+        clauses는 models.Clause 이거나 dict 일 수 있음.
+        미리 TF-IDF (char_wb n-gram) 행렬을 계산해둠.
+        """
+        self.clauses = clauses
+        self.texts = []
+        for c in clauses:
+            if hasattr(c, "title") and hasattr(c, "text"):
+                self.texts.append(f"{c.title} {c.text}")
+            elif isinstance(c, dict):
+                self.texts.append(f"{c.get('title', '')} {c.get('text', '')}")
+            else:
+                self.texts.append("")
+        
+        self.vectorizer = TfidfVectorizer(
+            analyzer="char_wb",
+            ngram_range=(2, 5),
+            min_df=1,
+            sublinear_tf=True
+        )
+        if self.texts and any(len(t.strip()) > 0 for t in self.texts):
+            self.matrix = self.vectorizer.fit_transform(self.texts)
+        else:
+            self.matrix = None
+
+    def search(self, new_clause: Any, top_k: int = 3) -> list[tuple[Any, float]]:
+        if not self.texts or self.matrix is None:
+            return []
+            
+        q_title = getattr(new_clause, "title", "") if hasattr(new_clause, "title") else new_clause.get("title", "")
+        q_text = getattr(new_clause, "text", "") if hasattr(new_clause, "text") else new_clause.get("text", "")
+        q_path = getattr(new_clause, "clause_path", "") if hasattr(new_clause, "clause_path") else new_clause.get("clause_path", "")
+        
+        q_str = f"{q_title} {q_text}"
+        qv = self.vectorizer.transform([q_str])
+        
+        sims = cosine_similarity(qv, self.matrix).ravel()
+        
+        num_a = extract_clause_number(q_path, q_title, q_text)
+        
+        results = []
+        for i, c in enumerate(self.clauses):
+            c_title = getattr(c, "title", "") if hasattr(c, "title") else c.get("title", "")
+            c_text = getattr(c, "text", "") if hasattr(c, "text") else c.get("text", "")
+            c_path = getattr(c, "clause_path", "") if hasattr(c, "clause_path") else c.get("clause_path", "")
+            
+            base_score = float(sims[i])
+            
+            num_b = extract_clause_number(c_path, c_title, c_text)
+            clause_num_bonus = 0.18 if (num_a and num_b and num_a == num_b) else 0.0
+            
+            kw_sim = keyword_weight_score(q_text, c_text)
+            
+            # TF-IDF 유사도 비중을 높이고, 키워드/번호 가점을 덧붙임
+            score = (base_score * 0.70) + (kw_sim * 0.30) + clause_num_bonus
+            score = min(1.0, score)
+            
+            if q_path and q_path == c_path:
+                score = max(score, 0.98)
+                
+            results.append((c, float(score)))
+            
+        results.sort(key=lambda x: x[1], reverse=True)
+        if top_k > 0:
+            return results[:top_k]
+        return results
 
