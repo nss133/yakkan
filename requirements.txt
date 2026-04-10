@@ -3,3 +3,4 @@ PyYAML
 requests
 beautifulsoup4
 PyMuPDF
+playwright

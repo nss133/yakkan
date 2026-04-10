@@ -14,6 +14,7 @@ class PeerDocMeta:
     insurer: str
     insurer_code: str
     product_group: str  # whole_life / cancer / dementia ...
+    doc_type: str  # TERMS / METHODS
     doc_id: str
     source_path: str
 
@@ -40,6 +41,7 @@ def index_pdf_to_document(meta: PeerDocMeta) -> dict:
         "insurer": meta.insurer,
         "insurer_code": meta.insurer_code,
         "product_group": meta.product_group,
+        "doc_type": meta.doc_type,
         "source_path": meta.source_path,
         "clauses": out_clauses,
     }
